@@ -536,7 +536,7 @@ class _HistoryPickerDialog(QDialog):
             QListWidget::item{padding:10px;border-bottom:1px solid #f1f5f9;}
             QListWidget::item:selected{background:#dbeafe;color:#1e40af;}""")
         self._populate(history)
-        self.list_widget.itemDoubleClicked.connect(lambda _: self.accept())
+        self.list_widget.itemDoubleClicked.connect(lambda _: self._on_ok())
         v.addWidget(self.list_widget, 1)
 
         hint = QLabel("提示：双击列表项或选中后点「确定」，快速套用（人员和时间需要自己改）")

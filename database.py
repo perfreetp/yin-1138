@@ -72,6 +72,23 @@ def init_db():
         FOREIGN KEY (contract_id) REFERENCES contracts(id),
         FOREIGN KEY (team_id) REFERENCES teams(id)
     );
+
+    CREATE TABLE IF NOT EXISTS follow_ups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        risk_id INTEGER,
+        airline_id INTEGER,
+        base_id INTEGER,
+        contract_id INTEGER,
+        work_date TEXT NOT NULL,
+        title TEXT NOT NULL,
+        action TEXT NOT NULL,
+        responsible TEXT NOT NULL,
+        planned_date TEXT,
+        status TEXT NOT NULL DEFAULT '待处理',
+        follow_type TEXT NOT NULL DEFAULT '重点问题',
+        created_at TEXT NOT NULL,
+        closed_at TEXT
+    );
     """)
 
     conn.commit()
@@ -304,3 +321,68 @@ def is_high_risk_type(work_type):
 
 def filter_high_risks(risks):
     return [r for r in risks if is_high_risk_type(r["work_type"])]
+
+
+def insert_follow_up(data):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""INSERT INTO follow_ups
+        (risk_id, airline_id, base_id, contract_id, work_date, title, action,
+         responsible, planned_date, status, follow_type, created_at, closed_at)
+        VALUES (:risk_id, :airline_id, :base_id, :contract_id, :work_date, :title, :action,
+                :responsible, :planned_date, :status, :follow_type, :created_at, :closed_at)""", data)
+    fid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return fid
+
+
+def update_follow_up(fu_id, data):
+    data["id"] = fu_id
+    sets = ", ".join(f"{k} = :{k}" for k in data.keys())
+    conn = get_conn()
+    conn.execute(f"UPDATE follow_ups SET {sets} WHERE id = :id", data)
+    conn.commit()
+    conn.close()
+
+
+def delete_follow_up(fu_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM follow_ups WHERE id = ?", (fu_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_follow_ups(airline_id=None, base_id=None, contract_id=None, status=None):
+    sql = """SELECT fu.*, a.name AS airline_name, b.name AS base_name,
+                    c.name AS contract_name
+             FROM follow_ups fu
+             LEFT JOIN airlines a ON a.id = fu.airline_id
+             LEFT JOIN bases b ON b.id = fu.base_id
+             LEFT JOIN contracts c ON c.id = fu.contract_id
+             WHERE 1=1"""
+    params = []
+    if airline_id:
+        sql += " AND fu.airline_id = ?"
+        params.append(airline_id)
+    if base_id:
+        sql += " AND fu.base_id = ?"
+        params.append(base_id)
+    if contract_id:
+        sql += " AND fu.contract_id = ?"
+        params.append(contract_id)
+    if status:
+        sql += " AND fu.status = ?"
+        params.append(status)
+    sql += " ORDER BY fu.status != '待处理', fu.status != '进行中', fu.id DESC"
+    conn = get_conn()
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_follow_up_by_id(fu_id):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM follow_ups WHERE id = ?", (fu_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None

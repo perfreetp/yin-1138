@@ -1,9 +1,11 @@
 from datetime import datetime, date
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QDate
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QFrame,
     QPushButton, QGroupBox, QGridLayout, QMessageBox, QSizePolicy,
-    QTextEdit, QApplication
+    QTextEdit, QApplication, QTableWidget, QTableWidgetItem, QHeaderView,
+    QComboBox, QDateEdit, QAbstractItemView, QDialog, QDialogButtonBox,
+    QLineEdit, QFormLayout
 )
 from PySide6.QtGui import QFont, QColor, QBrush, QGuiApplication
 
@@ -33,9 +35,9 @@ class DailyReportWindow(QWidget):
         top_bar.addWidget(title)
 
         ctx = self.context
-        info = QLabel(f"  客户：{ctx.get('airline_name', '全部航司')}  |  基地：{ctx.get('base_name', '全部基地')}  |  合同：{ctx.get('contract_name', '全部合同')}  |  日期：{ctx.get('work_date', '')}")
-        info.setStyleSheet("color:#475569;font-size:13px;padding:6px 14px;background:#f1f5f9;border-radius:8px;")
-        top_bar.addWidget(info)
+        self.info_label = QLabel(f"  客户：{ctx.get('airline_name', '全部航司')}  |  基地：{ctx.get('base_name', '全部基地')}  |  合同：{ctx.get('contract_name', '全部合同')}  |  日期：{ctx.get('work_date', '')}")
+        self.info_label.setStyleSheet("color:#475569;font-size:13px;padding:6px 14px;background:#f1f5f9;border-radius:8px;")
+        top_bar.addWidget(self.info_label)
         top_bar.addStretch()
 
         self.btn_fill = QPushButton("✏️ 编辑风险")
@@ -55,6 +57,21 @@ class DailyReportWindow(QWidget):
         top_bar.addWidget(self.btn_export)
         top_bar.addWidget(self.btn_back)
         root.addLayout(top_bar)
+
+        self.drill_bar = QHBoxLayout()
+        self.drill_label = QLabel("🎯 当前视图：总览")
+        self.drill_label.setStyleSheet("font-size:13px;font-weight:600;color:#0f172a;padding:6px 12px;background:#e0f2fe;border-radius:6px;")
+        self.drill_bar.addWidget(self.drill_label)
+        self.drill_bar.addStretch()
+        self.btn_back_overview = QPushButton("↩ 一键回到总览")
+        self.btn_back_overview.setFixedHeight(34)
+        self.btn_back_overview.setStyleSheet("""QPushButton{background:#0284c7;color:white;padding:0 16px;
+            border:none;border-radius:6px;font-weight:500;font-size:12px;}QPushButton:hover{background:#0369a1;}""")
+        self.btn_back_overview.clicked.connect(self._back_to_overview)
+        self.drill_bar.addWidget(self.btn_back_overview)
+        self.drill_widget = QWidget()
+        self.drill_widget.setLayout(self.drill_bar)
+        root.addWidget(self.drill_widget)
 
         overview_box = QGroupBox("📌 今日概览 · 给协调会快速说明")
         overview_layout = QHBoxLayout(overview_box)
@@ -115,10 +132,76 @@ class DailyReportWindow(QWidget):
         content_layout.addWidget(scroll)
         root.addWidget(content, 1)
 
+        fu_box = QGroupBox("📝 会议跟进台账（跨天闭环 · 选自重点问题与建议动作）")
+        fu_layout = QVBoxLayout(fu_box)
+        fu_layout.setContentsMargins(12, 14, 12, 12)
+        fu_layout.setSpacing(8)
+
+        fu_btn_row = QHBoxLayout()
+        self.btn_fu_add = QPushButton("➕ 新增跟进项")
+        self.btn_fu_add_manual = QPushButton("📌 从今日重点问题挑入台账")
+        fu_tip = QLabel("说明：跟进项按航司/基地/合同口径持久保存，第二天进入同一范围仍可看到未关闭项。")
+        fu_tip.setStyleSheet("color:#64748b;font-size:12px;")
+        for b in [self.btn_fu_add, self.btn_fu_add_manual]:
+            b.setFixedHeight(32)
+            b.setStyleSheet("""QPushButton{background:#059669;color:white;padding:0 16px;
+                border:none;border-radius:6px;font-weight:500;font-size:12px;}QPushButton:hover{background:#047857;}""")
+        self.btn_fu_add_manual.setStyleSheet("""QPushButton{background:#d97706;color:white;padding:0 16px;
+            border:none;border-radius:6px;font-weight:500;font-size:12px;}QPushButton:hover{background:#b45309;}""")
+        fu_btn_row.addWidget(self.btn_fu_add)
+        fu_btn_row.addWidget(self.btn_fu_add_manual)
+        fu_btn_row.addStretch()
+        fu_btn_row.addWidget(fu_tip)
+        fu_layout.addLayout(fu_btn_row)
+
+        self.fu_table = QTableWidget()
+        fu_headers = ["ID", "类型", "跟进事项", "具体动作", "责任方", "计划完成", "状态", "来源日期", "关联风险", "航司/基地"]
+        self.fu_table.setColumnCount(len(fu_headers))
+        self.fu_table.setHorizontalHeaderLabels(fu_headers)
+        self.fu_table.verticalHeader().setVisible(False)
+        self.fu_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.fu_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.fu_table.setAlternatingRowColors(True)
+        self.fu_table.setStyleSheet("""QTableWidget{gridline-color:#e2e8f0;font-size:12px;}
+            QHeaderView::section{background:#f1f5f9;padding:6px;border:none;font-weight:600;}
+            QTableWidget::item{padding:5px;}""")
+        fh = self.fu_table.horizontalHeader()
+        fh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        fh.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        fh.setSectionResizeMode(2, QHeaderView.Stretch)
+        fh.setSectionResizeMode(3, QHeaderView.Stretch)
+        for i in [4, 5, 6, 7, 8, 9]:
+            fh.setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        fu_layout.addWidget(self.fu_table)
+
+        fu_op_row = QHBoxLayout()
+        self.btn_fu_edit = QPushButton("✏️ 编辑选中项")
+        self.btn_fu_done = QPushButton("✅ 标记已完成")
+        self.btn_fu_del = QPushButton("🗑 删除选中项")
+        for b in [self.btn_fu_edit, self.btn_fu_done, self.btn_fu_del]:
+            b.setFixedHeight(32)
+            b.setStyleSheet("""QPushButton{background:#475569;color:white;padding:0 16px;
+                border:none;border-radius:6px;font-weight:500;font-size:12px;}QPushButton:hover{background:#334155;}""")
+        self.btn_fu_done.setStyleSheet("""QPushButton{background:#059669;color:white;padding:0 16px;
+            border:none;border-radius:6px;font-weight:500;font-size:12px;}QPushButton:hover{background:#047857;}""")
+        self.btn_fu_del.setStyleSheet("""QPushButton{background:#ef4444;color:white;padding:0 16px;
+            border:none;border-radius:6px;font-weight:500;font-size:12px;}QPushButton:hover{background:#dc2626;}""")
+        fu_op_row.addWidget(self.btn_fu_edit)
+        fu_op_row.addWidget(self.btn_fu_done)
+        fu_op_row.addWidget(self.btn_fu_del)
+        fu_op_row.addStretch()
+        fu_layout.addLayout(fu_op_row)
+        root.addWidget(fu_box)
+
         self.btn_back.clicked.connect(self._on_back)
         self.btn_refresh.clicked.connect(self._load_and_render)
         self.btn_fill.clicked.connect(self._on_fill)
         self.btn_export.clicked.connect(self._on_export)
+        self.btn_fu_add.clicked.connect(self._on_fu_add)
+        self.btn_fu_add_manual.clicked.connect(self._on_fu_add_from_problems)
+        self.btn_fu_edit.clicked.connect(self._on_fu_edit)
+        self.btn_fu_done.clicked.connect(self._on_fu_done)
+        self.btn_fu_del.clicked.connect(self._on_fu_del)
 
     def _make_stat_box(self, label, value, color):
         box = QFrame()
@@ -138,17 +221,75 @@ class DailyReportWindow(QWidget):
         return box, val
 
     def _load_and_render(self):
-        cid = self.context.get("contract_id")
-        aid = self.context.get("airline_id")
-        bid = self.context.get("base_id")
-        wd = self.context.get("work_date")
+        ctx = self.context
+        cid = ctx.get("contract_id")
+        aid = ctx.get("drill_airline_id") or ctx.get("airline_id")
+        bid = ctx.get("drill_base_id") or ctx.get("base_id")
+        wd = ctx.get("work_date")
         all_risks = database.get_risks(
             airline_id=aid, base_id=bid, contract_id=cid, work_date=wd)
         self.risks = database.filter_high_risks(all_risks)
+        self._update_drill_label()
         self._build_group_summary()
         self._build_alert_messages()
         self._build_columns()
         self._update_stats()
+        self._load_follow_ups()
+
+    def _update_drill_label(self):
+        ctx = self.context
+        if ctx.get("drill_airline_name"):
+            self.drill_label.setText(f"🎯 当前视图：分会场 ▸ {ctx['drill_airline_name']}（仅看该航司风险）")
+        elif ctx.get("drill_base_name"):
+            self.drill_label.setText(f"🎯 当前视图：分会场 ▸ {ctx['drill_base_name']}（仅看该基地风险）")
+        else:
+            self.drill_label.setText("🎯 当前视图：总览")
+
+    def _load_follow_ups(self):
+        ctx = self.context
+        aid = ctx.get("drill_airline_id") or ctx.get("airline_id")
+        bid = ctx.get("drill_base_id") or ctx.get("base_id")
+        cid = ctx.get("contract_id")
+        follow_ups = database.get_follow_ups(airline_id=aid, base_id=bid, contract_id=cid)
+        self.follow_ups = follow_ups
+        self.fu_table.setRowCount(len(follow_ups))
+        for row, fu in enumerate(follow_ups):
+            scope = ""
+            if fu.get("airline_name"):
+                scope = fu["airline_name"]
+            if fu.get("base_name"):
+                scope = (scope + " / " if scope else "") + fu["base_name"]
+            if not scope:
+                scope = "（全局）"
+            cols = [
+                str(fu["id"]),
+                fu["follow_type"],
+                fu["title"],
+                fu["action"],
+                fu["responsible"],
+                fu.get("planned_date") or "（未设）",
+                fu["status"],
+                fu["work_date"],
+                f"#{fu['risk_id']}" if fu.get("risk_id") else "—",
+                scope,
+            ]
+            for col, val in enumerate(cols):
+                item = QTableWidgetItem(val)
+                item.setTextAlignment(Qt.AlignCenter if col != 2 and col != 3 else Qt.AlignVCenter | Qt.AlignLeft)
+                status_colors = {
+                    "待处理": ("#fef3c7", "#92400e"),
+                    "进行中": ("#dbeafe", "#1e40af"),
+                    "已完成": ("#dcfce7", "#166534"),
+                    "已逾期": ("#fee2e2", "#991b1b"),
+                }
+                if col == 6 and val in status_colors:
+                    bg, fg = status_colors[val]
+                    item.setBackground(QBrush(QColor(bg)))
+                    item.setForeground(QBrush(QColor(fg)))
+                    f = item.font()
+                    f.setBold(True)
+                    item.setFont(f)
+                self.fu_table.setItem(row, col, item)
 
     def _build_group_summary(self):
         for i in reversed(range(self.group_inner_layout.count())):
@@ -194,6 +335,7 @@ class DailyReportWindow(QWidget):
             for ri, (name, items) in enumerate(sorted(data_map.items(), key=lambda x: -len(x[1]))):
                 row_colors = ["#ffffff", "#f8fafc"]
                 bg = row_colors[ri % 2]
+                first_id = items[0]["airline_id"] if field_name == "airline_name" else items[0]["base_id"]
                 values = [
                     name,
                     str(len(items)),
@@ -205,21 +347,32 @@ class DailyReportWindow(QWidget):
                     str(sum(1 for r in items if r["license_status"] != "valid" or not r["scope_ok"])),
                 ]
                 for ci, v in enumerate(values):
-                    vl = QLabel(v)
-                    vl.setAlignment(Qt.AlignCenter if ci > 0 else Qt.AlignVCenter | Qt.AlignLeft)
-                    style = f"font-size:12px;padding:5px 8px;background:{bg};border-radius:4px;"
                     if ci == 0:
-                        style += "font-weight:600;color:#0f172a;"
-                    if ci >= 5 and v != "0":
-                        style += "font-weight:700;"
-                        if ci == 5:
-                            style += "color:#be185d;"
-                        elif ci == 6:
-                            style += "color:#6b21a8;"
-                        elif ci == 7:
-                            style += "color:#dc2626;"
-                    vl.setStyleSheet(style)
-                    grid.addWidget(vl, ri + 1, ci)
+                        btn = QPushButton(f"🔍 {v}  (点击进入分会场)")
+                        btn.setStyleSheet(f"""QPushButton{{text-align:left;font-size:12px;padding:5px 8px;background:{bg};
+                            border:none;border-radius:4px;font-weight:600;color:#1e40af;}}
+                            QPushButton:hover{{background:#dbeafe;color:#1e3a8a;text-decoration:underline;}}""")
+                        btn.setCursor(Qt.PointingHandCursor)
+                        btn.setFlat(True)
+                        if field_name == "airline_name":
+                            btn.clicked.connect(lambda _=False, n=name, fid=first_id: self._drill_into_airline(fid, n))
+                        else:
+                            btn.clicked.connect(lambda _=False, n=name, fid=first_id: self._drill_into_base(fid, n))
+                        grid.addWidget(btn, ri + 1, ci)
+                    else:
+                        vl = QLabel(v)
+                        vl.setAlignment(Qt.AlignCenter)
+                        style = f"font-size:12px;padding:5px 8px;background:{bg};border-radius:4px;"
+                        if ci >= 5 and v != "0":
+                            style += "font-weight:700;"
+                            if ci == 5:
+                                style += "color:#be185d;"
+                            elif ci == 6:
+                                style += "color:#6b21a8;"
+                            elif ci == 7:
+                                style += "color:#dc2626;"
+                        vl.setStyleSheet(style)
+                        grid.addWidget(vl, ri + 1, ci)
 
             for ci in range(len(headers)):
                 grid.setColumnStretch(ci, 1 if ci == 0 else 0)
@@ -539,6 +692,10 @@ class DailyReportWindow(QWidget):
             scope_parts.append("合同项目：全部合同")
         scope_parts.append(f"作业日期：{ctx.get('work_date', '')}")
 
+        aid = ctx.get("drill_airline_id") or ctx.get("airline_id")
+        bid = ctx.get("drill_base_id") or ctx.get("base_id")
+        cid = ctx.get("contract_id")
+
         lines.append("=" * 70)
         lines.append("民 航 维 修 外 包 承 包 商 · 现 场 风 险 日 报")
         lines.append("=" * 70)
@@ -550,6 +707,8 @@ class DailyReportWindow(QWidget):
         lines.append("")
 
         if not self.risks:
+            fu_all = database.get_follow_ups(airline_id=aid, base_id=bid, contract_id=cid)
+            fu_open = [f for f in fu_all if f["status"] in ("待处理", "进行中", "已逾期")]
             lines.append("=" * 70)
             lines.append("  ☆ 当前数据范围说明")
             lines.append("-" * 70)
@@ -558,6 +717,17 @@ class DailyReportWindow(QWidget):
                 lines.append(f"    · {sp}")
             lines.append("")
             lines.append("  结论：本日上述范围内无高风险作业记录。")
+            lines.append("")
+            lines.append("  遗留跟进说明：")
+            lines.append(f"    ▸ 未关闭待办（{len(fu_open)} 项）：")
+            if fu_open:
+                for idx, f in enumerate(fu_open, 1):
+                    lines.append(f"      {idx}. [{f['status']}] {f['title']}")
+                    lines.append(f"         动作：{f['action']}    责任方：{f['responsible']}    计划：{f.get('planned_date') or '（未设）'}")
+            else:
+                lines.append("      （无未关闭跟进项。）")
+            lines.append(f"    ▸ 今日新增高风险：0 项")
+            lines.append(f"    ▸ 今日已关闭风险：0 项")
             lines.append("")
             lines.append("  会议确认：")
             lines.append("    承包商确认本日无高风险作业，各班组按计划推进低风险日常工作。")
@@ -583,7 +753,42 @@ class DailyReportWindow(QWidget):
         lines.append(f"    · 协调项：需客户安全员 {no_lbl.text()} 项 / 待项目经理审核 {ur_lbl.text()} 项")
         lines.append("")
 
-        lines.append("二、重点问题摘要（会议优先讨论项）")
+        fu_all = database.get_follow_ups(
+            airline_id=aid, base_id=bid, contract_id=cid)
+        fu_open = [f for f in fu_all if f["status"] in ("待处理", "进行中", "已逾期")]
+        fu_done = [f for f in fu_all if f["status"] == "已完成"]
+        today_str = ctx.get("work_date", "")
+        today_new = [r for r in self.risks if r["status"] != "已关闭"]
+        today_closed = [r for r in self.risks if r["status"] == "已关闭"]
+
+        lines.append("二、遗留跟进说明（跨天闭环跟踪）")
+        lines.append("-" * 70)
+        lines.append(f"  ▸ 未关闭待办（{len(fu_open)} 项）：")
+        if fu_open:
+            for idx, f in enumerate(fu_open, 1):
+                scope_name = f.get("airline_name") or f.get("base_name") or "全局"
+                lines.append(f"    {idx}. [{f['status']}] {f['title']}")
+                lines.append(f"       动作：{f['action']}    责任方：{f['responsible']}")
+                lines.append(f"       计划完成：{f.get('planned_date') or '（未设）'}    来源日期：{f['work_date']}    关联：#{f['risk_id'] if f.get('risk_id') else '—'}    范围：{scope_name}")
+        else:
+            lines.append("    （无未关闭跟进项，前序会议遗留问题均已闭环。）")
+        lines.append("")
+        lines.append(f"  ▸ 今日新增高风险（{len(today_new)} 项）：")
+        if today_new:
+            for r in today_new:
+                lines.append(f"    · 风险#{r['id']} 【{r['work_type']}】@{r['work_location']}（{r['team_name']}）状态：{r['status']}")
+        else:
+            lines.append("    （今日当前范围内无新增高风险作业。）")
+        lines.append("")
+        lines.append(f"  ▸ 今日已关闭风险（{len(today_closed)} 项）：")
+        if today_closed:
+            for r in today_closed:
+                lines.append(f"    · 风险#{r['id']} 【{r['work_type']}】@{r['work_location']}（{r['team_name']}）已关闭")
+        else:
+            lines.append("    （今日当前范围内无已关闭风险。）")
+        lines.append("")
+
+        lines.append("三、重点问题摘要（会议优先讨论项）")
         lines.append("-" * 70)
         problem_counter = 0
         follow_ups = []
@@ -650,7 +855,7 @@ class DailyReportWindow(QWidget):
             lines.append("  （未发现需要特别关注的异常问题，全部风险状态良好。）")
             lines.append("")
 
-        lines.append("三、建议跟进动作（会议分派、逐项落实）")
+        lines.append("四、建议跟进动作（会议分派、逐项落实）")
         lines.append("-" * 70)
         if not follow_ups:
             lines.append("  本日无特别跟进项，按计划正常推进各项高风险作业。")
@@ -672,7 +877,7 @@ class DailyReportWindow(QWidget):
                 lines.append(f"    时限要求：{deadline}")
                 lines.append("")
 
-        lines.append("四、高风险作业清单（按状态分类）")
+        lines.append("五、高风险作业清单（按状态分类）")
         lines.append("-" * 70)
         for status in ["未开工", "进行中", "已关闭"]:
             items = [r for r in self.risks if r["status"] == status]
@@ -707,7 +912,7 @@ class DailyReportWindow(QWidget):
                     lines.append(f"      补充说明：{r['remarks']}")
                 lines.append("")
 
-        lines.append("五、会议签字确认")
+        lines.append("六、会议签字确认")
         lines.append("-" * 70)
         lines.append("  承包商项目经理：______________________    签字日期：__________")
         lines.append("  客户方代表（如有）：____________________    签字日期：__________")
@@ -728,3 +933,330 @@ class DailyReportWindow(QWidget):
         cb.setText(text)
         QMessageBox.information(self, "复制成功",
                                 "日报文本已复制到剪贴板，可直接粘贴到邮件/微信/文档中。")
+
+    def _drill_into_airline(self, airline_id, airline_name):
+        ctx = self.context
+        ctx["drill_airline_id"] = airline_id
+        ctx["drill_airline_name"] = airline_name
+        ctx.pop("drill_base_id", None)
+        ctx.pop("drill_base_name", None)
+        self._load_and_render()
+        QMessageBox.information(self, "进入分会场",
+            f"已切换到分会场视图：{airline_name}\n当前仅展示该航司的风险清单、跟进台账和日报。")
+
+    def _drill_into_base(self, base_id, base_name):
+        ctx = self.context
+        ctx["drill_base_id"] = base_id
+        ctx["drill_base_name"] = base_name
+        ctx.pop("drill_airline_id", None)
+        ctx.pop("drill_airline_name", None)
+        self._load_and_render()
+        QMessageBox.information(self, "进入分会场",
+            f"已切换到分会场视图：{base_name}\n当前仅展示该基地的风险清单、跟进台账和日报。")
+
+    def _back_to_overview(self):
+        ctx = self.context
+        has_drill = ctx.pop("drill_airline_id", None) or ctx.pop("drill_base_id", None)
+        ctx.pop("drill_airline_name", None)
+        ctx.pop("drill_base_name", None)
+        if has_drill:
+            self._load_and_render()
+
+    def _fu_default_data(self):
+        ctx = self.context
+        return {
+            "airline_id": ctx.get("drill_airline_id") or ctx.get("airline_id"),
+            "base_id": ctx.get("drill_base_id") or ctx.get("base_id"),
+            "contract_id": ctx.get("contract_id"),
+            "work_date": ctx.get("work_date"),
+        }
+
+    def _on_fu_add(self):
+        ctx = self.context
+        dlg = _FollowUpEditDialog(self, ctx, default=self._fu_default_data())
+        if dlg.exec() == QDialog.Accepted and dlg.result_data:
+            data = dlg.result_data
+            data["created_at"] = datetime.now().isoformat(timespec="seconds")
+            data["closed_at"] = None
+            database.insert_follow_up(data)
+            self._load_follow_ups()
+            QMessageBox.information(self, "新增成功", "跟进项已加入台账。")
+
+    def _on_fu_add_from_problems(self):
+        if not self.risks:
+            QMessageBox.information(self, "提示", "当前无高风险作业，无可挑入的重点问题。")
+            return
+        today = date.today()
+        personnel = database.get_personnel()
+        candidates = []
+        for r in self.risks:
+            issues = []
+            if not r["scope_ok"]:
+                issues.append("超范围作业")
+            if r["license_status"] == "expired":
+                issues.append("许可证已过期")
+            elif r["license_status"] == "warning":
+                issues.append("许可证即将过期")
+            if r["need_safety_officer"]:
+                issues.append("需客户安全员")
+            if not r["reviewed"]:
+                issues.append("待审核")
+            pids = r["personnel_ids"].split(",") if r["personnel_ids"] else []
+            chosen = [p for p in personnel if str(p["id"]) in pids]
+            for p in chosen:
+                exp = datetime.fromisoformat(p["license_expiry"]).date()
+                days = (exp - today).days
+                if days < 7:
+                    issues.append(f"{p['name']}证照{days}天")
+            if issues:
+                candidates.append((r, issues))
+        if not candidates:
+            QMessageBox.information(self, "提示", "今日重点问题无异常，无需挑入台账。")
+            return
+        dlg = _ProblemPickerDialog(self, candidates, self.context, self._fu_default_data())
+        if dlg.exec() == QDialog.Accepted and dlg.selected:
+            for r, issues, action, responsible, planned in dlg.selected:
+                data = {
+                    "risk_id": r["id"],
+                    "airline_id": r.get("airline_id"),
+                    "base_id": r.get("base_id"),
+                    "contract_id": r.get("contract_id"),
+                    "work_date": r["work_date"],
+                    "title": f"风险#{r['id']} 【{r['work_type']}】@{r['work_location']}（{r['team_name']}）：{'、'.join(issues)}",
+                    "action": action,
+                    "responsible": responsible,
+                    "planned_date": planned,
+                    "status": "待处理",
+                    "follow_type": "重点问题",
+                    "created_at": datetime.now().isoformat(timespec="seconds"),
+                    "closed_at": None,
+                }
+                database.insert_follow_up(data)
+            self._load_follow_ups()
+            QMessageBox.information(self, "挑入成功", f"已将 {len(dlg.selected)} 个重点问题加入跟进台账。")
+
+    def _on_fu_edit(self):
+        rows = self.fu_table.selectionModel().selectedRows()
+        if not rows:
+            QMessageBox.warning(self, "提示", "请先选择一条跟进项。")
+            return
+        fu_id = int(self.fu_table.item(rows[0].row(), 0).text())
+        fu = database.get_follow_up_by_id(fu_id)
+        if not fu:
+            return
+        dlg = _FollowUpEditDialog(self, self.context, fu=fu)
+        if dlg.exec() == QDialog.Accepted and dlg.result_data:
+            data = dlg.result_data
+            if data.get("status") == "已完成":
+                data["closed_at"] = datetime.now().isoformat(timespec="seconds")
+            database.update_follow_up(fu_id, data)
+            self._load_follow_ups()
+            QMessageBox.information(self, "更新成功", f"跟进项 #{fu_id} 已更新。")
+
+    def _on_fu_done(self):
+        rows = self.fu_table.selectionModel().selectedRows()
+        if not rows:
+            QMessageBox.warning(self, "提示", "请先选择一条跟进项。")
+            return
+        fu_id = int(self.fu_table.item(rows[0].row(), 0).text())
+        database.update_follow_up(fu_id, {
+            "status": "已完成",
+            "closed_at": datetime.now().isoformat(timespec="seconds"),
+        })
+        self._load_follow_ups()
+        QMessageBox.information(self, "已完成", f"跟进项 #{fu_id} 已标记为完成。")
+
+    def _on_fu_del(self):
+        rows = self.fu_table.selectionModel().selectedRows()
+        if not rows:
+            QMessageBox.warning(self, "提示", "请先选择一条跟进项。")
+            return
+        fu_id = int(self.fu_table.item(rows[0].row(), 0).text())
+        if QMessageBox.question(self, "删除确认", f"确定删除跟进项 #{fu_id} 吗？",
+                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        database.delete_follow_up(fu_id)
+        self._load_follow_ups()
+
+
+class _FollowUpEditDialog(QDialog):
+    def __init__(self, parent, context, default=None, fu=None):
+        super().__init__(parent)
+        self.setWindowTitle("编辑跟进项" if fu else "新增跟进项")
+        self.resize(560, 480)
+        self.result_data = None
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(18, 18, 18, 18)
+        v.setSpacing(12)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        self.txt_title = QLineEdit()
+        self.txt_title.setPlaceholderText("如：风险#12 喷漆作业许可证即将过期")
+        self.txt_action = QLineEdit()
+        self.txt_action.setPlaceholderText("如：本周内完成证照续期并提交客户验证")
+        self.txt_responsible = QLineEdit()
+        self.txt_responsible.setPlaceholderText("如：喷漆一班班组长 / 项目经理")
+
+        self.cb_type = QComboBox()
+        self.cb_type.addItems(["重点问题", "建议动作", "客户协调", "资质整改", "其他"])
+
+        self.de_planned = QDateEdit()
+        self.de_planned.setCalendarPopup(True)
+        self.de_planned.setDisplayFormat("yyyy-MM-dd")
+        self.de_planned.setDate(QDate.currentDate().addDays(1))
+
+        self.cb_status = QComboBox()
+        self.cb_status.addItems(["待处理", "进行中", "已完成", "已逾期"])
+
+        for label, w in [("跟进类型", self.cb_type), ("跟进事项", self.txt_title),
+                         ("具体动作", self.txt_action), ("责任方", self.txt_responsible),
+                         ("计划完成日期", self.de_planned), ("处理状态", self.cb_status)]:
+            lab = QLabel(label)
+            lab.setStyleSheet("font-weight:600;font-size:13px;")
+            form.addRow(lab, w)
+        v.addLayout(form)
+
+        if fu:
+            self.txt_title.setText(fu["title"])
+            self.txt_action.setText(fu["action"])
+            self.txt_responsible.setText(fu["responsible"])
+            ti = self.cb_type.findText(fu["follow_type"])
+            if ti >= 0:
+                self.cb_type.setCurrentIndex(ti)
+            if fu.get("planned_date"):
+                self.de_planned.setDate(QDate.fromString(fu["planned_date"], "yyyy-MM-dd"))
+            si = self.cb_status.findText(fu["status"])
+            if si >= 0:
+                self.cb_status.setCurrentIndex(si)
+        else:
+            self.txt_responsible.setText("项目经理")
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("保存")
+        bb.button(QDialogButtonBox.Cancel).setText("取消")
+        bb.button(QDialogButtonBox.Ok).setStyleSheet("background:#059669;color:white;padding:8px 24px;border:none;border-radius:6px;font-weight:600;")
+        bb.button(QDialogButtonBox.Cancel).setStyleSheet("background:#94a3b8;color:white;padding:8px 24px;border:none;border-radius:6px;")
+        bb.accepted.connect(self._on_ok)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+
+    def _on_ok(self):
+        title = self.txt_title.text().strip()
+        action = self.txt_action.text().strip()
+        responsible = self.txt_responsible.text().strip()
+        if not title:
+            QMessageBox.warning(self, "提示", "请填写跟进事项。")
+            return
+        if not responsible:
+            QMessageBox.warning(self, "提示", "请填写责任方。")
+            return
+        self.result_data = {
+            "title": title,
+            "action": action or "（待补充具体动作）",
+            "responsible": responsible,
+            "follow_type": self.cb_type.currentText(),
+            "planned_date": self.de_planned.date().toString("yyyy-MM-dd"),
+            "status": self.cb_status.currentText(),
+        }
+        self.accept()
+
+
+class _ProblemPickerDialog(QDialog):
+    def __init__(self, parent, candidates, context, default):
+        super().__init__(parent)
+        self.setWindowTitle("从今日重点问题挑入跟进台账")
+        self.resize(900, 600)
+        self.selected = []
+        self._rows_data = []
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(12)
+
+        info = QLabel(f"共 {len(candidates)} 条带异常的重点问题，勾选需要列入台账的项，逐条填写动作和责任方：")
+        info.setStyleSheet("font-size:13px;")
+        v.addWidget(info)
+
+        from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QCheckBox, QWidget
+        self.table = QTableWidget()
+        headers = ["勾选", "风险ID", "作业", "异常", "具体动作", "责任方", "计划完成"]
+        self.table.setColumnCount(len(headers))
+        self.table.setHorizontalHeaderLabels(headers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setStyleSheet("QTableWidget{gridline-color:#e2e8f0;font-size:12px;}"
+                                "QHeaderView::section{background:#f1f5f9;padding:6px;border:none;font-weight:600;}")
+        self.table.setColumnWidth(0, 50)
+        self.table.setColumnWidth(1, 70)
+        self.table.setColumnWidth(2, 140)
+        self.table.setColumnWidth(3, 200)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+
+        self.table.setRowCount(len(candidates))
+        for ri, (r, issues) in enumerate(candidates):
+            cb = QCheckBox()
+            cb.setChecked(True)
+            cw = QWidget()
+            cl = QHBoxLayout(cw)
+            cl.setContentsMargins(0, 0, 0, 0)
+            cl.addWidget(cb)
+            cl.setAlignment(cb, Qt.AlignCenter)
+            self.table.setCellWidget(ri, 0, cw)
+
+            self.table.setItem(ri, 1, QTableWidgetItem(str(r["id"])))
+            self.table.setItem(ri, 2, QTableWidgetItem(f"{r['work_type']}@{r['work_location']}"))
+            self.table.setItem(ri, 3, QTableWidgetItem("、".join(issues)))
+
+            action_edit = QLineEdit()
+            default_actions = {
+                "超范围作业": "确认作业范围，补充客户审批",
+                "许可证已过期": "办理证照续期，人员暂停作业",
+                "许可证即将过期": "本周完成证照续期",
+                "需客户安全员": "开工前通知客户安全员到场",
+                "待审核": "会议现场完成审核",
+            }
+            action_edit.setText(next((default_actions[i] for i in issues if i in default_actions), "核对并整改"))
+            self.table.setCellWidget(ri, 4, action_edit)
+
+            resp_edit = QLineEdit()
+            resp_edit.setText(f"{r['team_name']}班组长")
+            self.table.setCellWidget(ri, 5, resp_edit)
+
+            de = QDateEdit()
+            de.setCalendarPopup(True)
+            de.setDisplayFormat("yyyy-MM-dd")
+            de.setDate(QDate.currentDate().addDays(1))
+            self.table.setCellWidget(ri, 6, de)
+
+            self._rows_data.append((cb, r, issues, action_edit, resp_edit, de))
+        self.table.setColumnHeight(0, 36)
+        for ri in range(len(candidates)):
+            self.table.setRowHeight(ri, 40)
+        v.addWidget(self.table, 1)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("加入台账")
+        bb.button(QDialogButtonBox.Cancel).setText("取消")
+        bb.button(QDialogButtonBox.Ok).setStyleSheet("background:#059669;color:white;padding:8px 24px;border:none;border-radius:6px;font-weight:600;")
+        bb.button(QDialogButtonBox.Cancel).setStyleSheet("background:#94a3b8;color:white;padding:8px 24px;border:none;border-radius:6px;")
+        bb.accepted.connect(self._on_ok)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+
+    def _on_ok(self):
+        self.selected = []
+        for cb, r, issues, action_edit, resp_edit, de in self._rows_data:
+            if cb.isChecked():
+                self.selected.append((
+                    r, issues,
+                    action_edit.text().strip(),
+                    resp_edit.text().strip(),
+                    de.date().toString("yyyy-MM-dd"),
+                ))
+        if not self.selected:
+            QMessageBox.warning(self, "提示", "请至少勾选一条重点问题。")
+            return
+        self.accept()
