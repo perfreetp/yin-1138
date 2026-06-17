@@ -9,7 +9,7 @@ from PySide6.QtGui import QFont, QColor, QBrush
 
 import database
 
-HIGH_RISK_TYPES = ["喷漆作业", "打磨作业", "清洗作业", "结构拆装", "发动机维修", "起落架检修", "复合材料修复"]
+HIGH_RISK_TYPES = database.HIGH_RISK_TYPES
 
 
 class ProjectSelector(QWidget):

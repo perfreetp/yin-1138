@@ -77,6 +77,21 @@ class DailyReportWindow(QWidget):
             overview_layout.addWidget(self.stats[key])
         root.addWidget(overview_box)
 
+        group_box = QGroupBox("📊 分组汇总（按客户航司 / 维修基地）")
+        group_layout = QVBoxLayout(group_box)
+        group_layout.setContentsMargins(16, 16, 16, 16)
+        group_layout.setSpacing(10)
+        self.group_scroll = QScrollArea()
+        self.group_scroll.setWidgetResizable(True)
+        self.group_scroll.setFrameShape(QFrame.NoFrame)
+        self.group_inner = QWidget()
+        self.group_inner_layout = QVBoxLayout(self.group_inner)
+        self.group_inner_layout.setContentsMargins(0, 0, 0, 0)
+        self.group_inner_layout.setSpacing(8)
+        self.group_scroll.setWidget(self.group_inner)
+        group_layout.addWidget(self.group_scroll)
+        root.addWidget(group_box)
+
         alerts_box = QGroupBox("🚨 重点关注问题（会议需明确处置）")
         alerts_layout = QVBoxLayout(alerts_box)
         alerts_layout.setContentsMargins(16, 16, 16, 16)
@@ -127,11 +142,109 @@ class DailyReportWindow(QWidget):
         aid = self.context.get("airline_id")
         bid = self.context.get("base_id")
         wd = self.context.get("work_date")
-        self.risks = database.get_risks(
+        all_risks = database.get_risks(
             airline_id=aid, base_id=bid, contract_id=cid, work_date=wd)
+        self.risks = database.filter_high_risks(all_risks)
+        self._build_group_summary()
         self._build_alert_messages()
         self._build_columns()
         self._update_stats()
+
+    def _build_group_summary(self):
+        for i in reversed(range(self.group_inner_layout.count())):
+            w = self.group_inner_layout.itemAt(i).widget()
+            if w:
+                w.setParent(None)
+
+        ctx = self.context
+        show_airline = not ctx.get("airline_id")
+        show_base = not ctx.get("base_id")
+
+        if not show_airline and not show_base:
+            tip = QLabel("💡 已选中具体航司/基地，无需分组汇总。可在筛选页切换为「全部航司」或「全部基地」查看分组对比。")
+            tip.setStyleSheet("color:#475569;font-size:13px;padding:10px 14px;background:#f1f5f9;border-radius:6px;")
+            tip.setWordWrap(True)
+            self.group_inner_layout.addWidget(tip)
+            return
+
+        today_risks = self.risks
+
+        def _render_section(title, field_name, data_map, accent):
+            if not data_map:
+                return
+            sec = QFrame()
+            sec.setStyleSheet("QFrame{background:white;border:1px solid #e2e8f0;border-radius:8px;}")
+            sl = QVBoxLayout(sec)
+            sl.setContentsMargins(14, 12, 14, 12)
+            sl.setSpacing(8)
+            t = QLabel(title)
+            t.setFont(QFont("Microsoft YaHei", 13, QFont.Bold))
+            t.setStyleSheet(f"color:{accent};")
+            sl.addWidget(t)
+
+            grid = QGridLayout()
+            grid.setSpacing(8)
+            headers = ["分类", "风险总数", "未开工", "进行中", "已关闭", "待审核", "需安全员", "证照/范围异常"]
+            for ci, h in enumerate(headers):
+                hl = QLabel(h)
+                hl.setStyleSheet("font-size:12px;font-weight:600;color:#64748b;padding:4px 8px;background:#f8fafc;border-radius:4px;")
+                hl.setAlignment(Qt.AlignCenter)
+                grid.addWidget(hl, 0, ci)
+
+            for ri, (name, items) in enumerate(sorted(data_map.items(), key=lambda x: -len(x[1]))):
+                row_colors = ["#ffffff", "#f8fafc"]
+                bg = row_colors[ri % 2]
+                values = [
+                    name,
+                    str(len(items)),
+                    str(sum(1 for r in items if r["status"] == "未开工")),
+                    str(sum(1 for r in items if r["status"] == "进行中")),
+                    str(sum(1 for r in items if r["status"] == "已关闭")),
+                    str(sum(1 for r in items if not r["reviewed"])),
+                    str(sum(1 for r in items if r["need_safety_officer"])),
+                    str(sum(1 for r in items if r["license_status"] != "valid" or not r["scope_ok"])),
+                ]
+                for ci, v in enumerate(values):
+                    vl = QLabel(v)
+                    vl.setAlignment(Qt.AlignCenter if ci > 0 else Qt.AlignVCenter | Qt.AlignLeft)
+                    style = f"font-size:12px;padding:5px 8px;background:{bg};border-radius:4px;"
+                    if ci == 0:
+                        style += "font-weight:600;color:#0f172a;"
+                    if ci >= 5 and v != "0":
+                        style += "font-weight:700;"
+                        if ci == 5:
+                            style += "color:#be185d;"
+                        elif ci == 6:
+                            style += "color:#6b21a8;"
+                        elif ci == 7:
+                            style += "color:#dc2626;"
+                    vl.setStyleSheet(style)
+                    grid.addWidget(vl, ri + 1, ci)
+
+            for ci in range(len(headers)):
+                grid.setColumnStretch(ci, 1 if ci == 0 else 0)
+            sl.addLayout(grid)
+            self.group_inner_layout.addWidget(sec)
+
+        if show_airline:
+            airline_map = {}
+            for r in today_risks:
+                key = r["airline_name"]
+                airline_map.setdefault(key, []).append(r)
+            _render_section("✈️  按客户航司分组", "airline_name", airline_map, "#0284c7")
+
+        if show_base:
+            base_map = {}
+            for r in today_risks:
+                key = r["base_name"]
+                base_map.setdefault(key, []).append(r)
+            _render_section("🏭  按维修基地分组", "base_name", base_map, "#059669")
+
+        if not self.risks:
+            tip = QLabel("✅ 当前筛选范围内无高风险记录，分组汇总为空。")
+            tip.setStyleSheet("color:#059669;font-size:13px;padding:10px 14px;background:#ecfdf5;border-radius:6px;")
+            tip.setWordWrap(True)
+            self.group_inner_layout.addWidget(tip)
 
     def _build_alert_messages(self):
         for i in reversed(range(self.alerts_area.count())):
@@ -408,88 +521,205 @@ class DailyReportWindow(QWidget):
     def _build_report_text(self):
         ctx = self.context
         lines = []
-        lines.append(f"【民航维修现场风险日报】")
-        lines.append(f"日期: {ctx.get('work_date', '')}")
-        lines.append(f"客户航司: {ctx.get('airline_name', '全部航司')}")
-        lines.append(f"维修基地: {ctx.get('base_name', '全部基地')}")
-        lines.append(f"合同项目: {ctx.get('contract_name', '全部合同')}")
-        lines.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        today = date.today()
+        gen_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        scope_parts = []
+        if ctx.get("airline_name") and ctx["airline_name"] != "全部航司":
+            scope_parts.append(f"客户航司：{ctx['airline_name']}")
+        else:
+            scope_parts.append("客户航司：全部航司")
+        if ctx.get("base_name") and ctx["base_name"] != "全部基地":
+            scope_parts.append(f"维修基地：{ctx['base_name']}")
+        else:
+            scope_parts.append("维修基地：全部基地")
+        if ctx.get("contract_name") and ctx["contract_name"] != "全部合同":
+            scope_parts.append(f"合同项目：{ctx['contract_name']}")
+        else:
+            scope_parts.append("合同项目：全部合同")
+        scope_parts.append(f"作业日期：{ctx.get('work_date', '')}")
+
+        lines.append("=" * 70)
+        lines.append("民 航 维 修 外 包 承 包 商 · 现 场 风 险 日 报")
+        lines.append("=" * 70)
+        lines.append("  每日协调会会议纪要")
+        lines.append("-" * 70)
+        lines.append(f"  生成时间：{gen_time}")
+        lines.append(f"  数据范围：{'  |  '.join(scope_parts)}")
+        lines.append(f"  统计口径：仅高风险作业（喷漆/打磨/清洗/结构拆装/发动机/起落架/复材修复）")
         lines.append("")
-        lines.append(f"=== 概览 ===")
+
+        if not self.risks:
+            lines.append("=" * 70)
+            lines.append("  ☆ 当前数据范围说明")
+            lines.append("-" * 70)
+            lines.append("  在以下数据范围内：")
+            for sp in scope_parts:
+                lines.append(f"    · {sp}")
+            lines.append("")
+            lines.append("  结论：本日上述范围内无高风险作业记录。")
+            lines.append("")
+            lines.append("  会议确认：")
+            lines.append("    承包商确认本日无高风险作业，各班组按计划推进低风险日常工作。")
+            lines.append("    如有临时新增高风险作业，须在开工前补录并通知项目经理。")
+            lines.append("=" * 70)
+            return "\n".join(lines)
+
         box, total_lbl = self.stats["total"]
         box, ns_lbl = self.stats["not_started"]
         box, ip_lbl = self.stats["in_progress"]
         box, cl_lbl = self.stats["closed"]
-        lines.append(f"风险总数: {total_lbl.text()}   未开工: {ns_lbl.text()}   进行中: {ip_lbl.text()}   已关闭: {cl_lbl.text()}")
         box, os_lbl = self.stats["out_of_scope"]
         box, li_lbl = self.stats["license_issue"]
         box, qm_lbl = self.stats["qual_mismatch"]
         box, no_lbl = self.stats["need_officer"]
         box, ur_lbl = self.stats["unreviewed"]
-        lines.append(f"超范围: {os_lbl.text()}  证照异常: {li_lbl.text()}  资质不匹配: {qm_lbl.text()}  需安全员: {no_lbl.text()}  待审核: {ur_lbl.text()}")
+
+        lines.append("一、总体情况概览")
+        lines.append("-" * 70)
+        lines.append(f"  高风险总数：{total_lbl.text()} 项")
+        lines.append(f"    · 按状态：未开工 {ns_lbl.text()} 项 / 进行中 {ip_lbl.text()} 项 / 已关闭 {cl_lbl.text()} 项")
+        lines.append(f"    · 合规性：超范围 {os_lbl.text()} 项 / 证照异常 {li_lbl.text()} 项 / 资质不匹配 {qm_lbl.text()} 项")
+        lines.append(f"    · 协调项：需客户安全员 {no_lbl.text()} 项 / 待项目经理审核 {ur_lbl.text()} 项")
         lines.append("")
 
-        lines.append(f"=== 重点关注 ===")
-        today = date.today()
-        alerts = []
+        lines.append("二、重点问题摘要（会议优先讨论项）")
+        lines.append("-" * 70)
+        problem_counter = 0
+        follow_ups = []
+
+        personnel = database.get_personnel()
+        teams = database.get_teams()
         for r in self.risks:
-            r_alerts = []
+            r_issues = []
             if not r["scope_ok"]:
-                r_alerts.append("超范围作业")
+                r_issues.append("超范围作业")
+                follow_ups.append((r["id"], r["work_type"], r["work_location"],
+                                  "确认作业范围，补充客户方审批文件",
+                                  "项目经理 → 客户方"))
             if r["license_status"] == "expired":
-                r_alerts.append("许可证已过期")
+                r_issues.append("相关许可证已过期")
+                follow_ups.append((r["id"], r["work_type"], r["work_location"],
+                                   "立即办理证照续期，人员暂停参与该项作业",
+                                   f"{r['team_name']}班组长"))
             elif r["license_status"] == "warning":
-                r_alerts.append("许可证即将过期")
+                r_issues.append("相关许可证即将过期")
+                follow_ups.append((r["id"], r["work_type"], r["work_location"],
+                                   "本周内完成证照续期并提交客户验证",
+                                   f"{r['team_name']}班组长"))
             if r["need_safety_officer"]:
-                r_alerts.append("需客户安全员到场")
+                r_issues.append("需客户方安全员到场监护")
+                follow_ups.append((r["id"], r["work_type"], r["work_location"],
+                                   "开工前2小时通知客户安全员，确认到场时间",
+                                   "项目经理协调"))
             if not r["reviewed"]:
-                r_alerts.append("待审核")
+                r_issues.append("项目经理尚未审核")
+                follow_ups.append((r["id"], r["work_type"], r["work_location"],
+                                   "本次会议现场完成审核并签署意见",
+                                   "项目经理"))
             pids = r["personnel_ids"].split(",") if r["personnel_ids"] else []
-            personnel = database.get_personnel()
             chosen = [p for p in personnel if str(p["id"]) in pids]
+            wt = r["work_type"]
+            qual_issues = []
             for p in chosen:
                 exp = datetime.fromisoformat(p["license_expiry"]).date()
                 days = (exp - today).days
+                if "喷漆" in wt and "喷漆" not in p["qualifications"]:
+                    qual_issues.append(f"{p['name']}无喷漆作业资质")
+                if "打磨" in wt and "打磨" not in p["qualifications"]:
+                    qual_issues.append(f"{p['name']}无打磨作业资质")
+                if ("结构" in wt or "复材" in wt) and "结构维修" not in p["qualifications"] and "复材" not in p["qualifications"]:
+                    qual_issues.append(f"{p['name']}无结构/复材维修资质")
                 if days < 7:
-                    r_alerts.append(f"{p['name']}证照{'即将过期' if days >= 0 else '已过期'}")
-            if r_alerts:
-                alerts.append(f"- #{r['id']} 【{r['work_type']}】@{r['work_location']} ({r['team_name']}): " + "、".join(r_alerts))
-        if alerts:
-            lines.extend(alerts)
-        else:
-            lines.append("无异常")
-        lines.append("")
+                    qual_issues.append(f"{p['name']}个人证照{'即将过期' if days >= 0 else '已过期'}({days}天)")
+            if qual_issues:
+                r_issues.extend(qual_issues)
+                follow_ups.append((r["id"], wt, r["work_location"],
+                                   "核对人员资质并调换合格人员",
+                                   f"{r['team_name']}班组长"))
+            if r_issues:
+                problem_counter += 1
+                lines.append(f"  {problem_counter}. 风险#{r['id']} 【{wt}】@{r['work_location']}（{r['team_name']}）")
+                for issue in r_issues:
+                    lines.append(f"      ▸ {issue}")
+                lines.append(f"      ▸ 参与人员：{'、'.join(p['name'] for p in chosen)}")
+                lines.append(f"      ▸ 当前状态：{r['status']}  |  预计关闭：{r['est_end_time'] or '（未设定）'}")
+                lines.append("")
 
+        if problem_counter == 0:
+            lines.append("  （未发现需要特别关注的异常问题，全部风险状态良好。）")
+            lines.append("")
+
+        lines.append("三、建议跟进动作（会议分派、逐项落实）")
+        lines.append("-" * 70)
+        if not follow_ups:
+            lines.append("  本日无特别跟进项，按计划正常推进各项高风险作业。")
+        else:
+            seen = set()
+            idx = 0
+            for rid, wt, loc, action, owner in follow_ups:
+                key = (rid, action)
+                if key in seen:
+                    continue
+                seen.add(key)
+                idx += 1
+                status = next((r["status"] for r in self.risks if r["id"] == rid), "")
+                deadline = "本日闭会前" if status in ["进行中", "未开工"] else "下一工作日早班前"
+                lines.append(f"  动作#{idx}")
+                lines.append(f"    关联风险：#{rid} 【{wt}】@{loc}（状态：{status}）")
+                lines.append(f"    具体动作：{action}")
+                lines.append(f"    责任方：{owner}")
+                lines.append(f"    时限要求：{deadline}")
+                lines.append("")
+
+        lines.append("四、高风险作业清单（按状态分类）")
+        lines.append("-" * 70)
         for status in ["未开工", "进行中", "已关闭"]:
-            lines.append(f"=== {status} ===")
             items = [r for r in self.risks if r["status"] == status]
             if not items:
-                lines.append("（无）")
-            else:
-                for r in items:
-                    lines.append(f"- #{r['id']} 【{r['work_type']}】 {r['work_location']}")
-                    lines.append(f"    班组: {r['team_name']}  合同: {r['contract_name']}")
-                    pids = r["personnel_ids"].split(",") if r["personnel_ids"] else []
-                    personnel = database.get_personnel()
-                    chosen = [p for p in personnel if str(p["id"]) in pids]
-                    lines.append(f"    人员: {'、'.join(p['name'] for p in chosen)}")
-                    lines.append(f"    隔离: {r['isolation_measures']}")
-                    if r["est_end_time"]:
-                        lines.append(f"    预计关闭: {r['est_end_time']}")
-                    info = []
-                    if r["license_status"] != "valid":
-                        info.append("证照异常")
-                    if not r["scope_ok"]:
-                        info.append("超范围")
-                    if r["need_safety_officer"]:
-                        info.append("需安全员")
-                    if not r["reviewed"]:
-                        info.append("待审核")
-                    if info:
-                        lines.append(f"    标注: {'、'.join(info)}")
-                    if r["remarks"]:
-                        lines.append(f"    备注: {r['remarks']}")
+                continue
+            lines.append(f"  ■【{status}】共 {len(items)} 项")
             lines.append("")
+            for r in items:
+                pids = r["personnel_ids"].split(",") if r["personnel_ids"] else []
+                chosen = [p for p in personnel if str(p["id"]) in pids]
+                leader = next((t["leader"] for t in teams if t["id"] == r["team_id"]), "（未设）")
+                tags = []
+                if r["license_status"] != "valid":
+                    tags.append("证照异常")
+                if not r["scope_ok"]:
+                    tags.append("超范围")
+                if r["need_safety_officer"]:
+                    tags.append("需安全员")
+                if not r["reviewed"]:
+                    tags.append("待审核")
+                lines.append(f"    · 风险#{r['id']}  {r['work_type']}")
+                lines.append(f"      作业位置：{r['work_location']}")
+                lines.append(f"      所属合同：{r['contract_name']}")
+                lines.append(f"      负责班组：{r['team_name']}（班组长：{leader}）")
+                lines.append(f"      参与人员：{'、'.join(p['name'] for p in chosen)}")
+                lines.append(f"      隔离措施：{r['isolation_measures']}")
+                if r["est_end_time"]:
+                    lines.append(f"      预计关闭：{r['est_end_time']}")
+                if tags:
+                    lines.append(f"      重要标注：{'、'.join(tags)}")
+                if r["remarks"]:
+                    lines.append(f"      补充说明：{r['remarks']}")
+                lines.append("")
+
+        lines.append("五、会议签字确认")
+        lines.append("-" * 70)
+        lines.append("  承包商项目经理：______________________    签字日期：__________")
+        lines.append("  客户方代表（如有）：____________________    签字日期：__________")
+        lines.append("")
+        lines.append("  会议补充结论：")
+        lines.append("  ________________________________________________________________")
+        lines.append("  ________________________________________________________________")
+        lines.append("  ________________________________________________________________")
+        lines.append("")
+        lines.append("=" * 70)
+        lines.append(f"  报告生成：{gen_time}    数据来源：系统风险数据库实时快照")
+        lines.append("=" * 70)
         return "\n".join(lines)
 
     def _on_export(self):

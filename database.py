@@ -290,3 +290,17 @@ def update_risk(risk_id, data):
     conn.execute(f"UPDATE risks SET {sets} WHERE id = :id", data)
     conn.commit()
     conn.close()
+
+
+HIGH_RISK_TYPES = [
+    "喷漆作业", "打磨作业", "清洗作业", "结构拆装",
+    "发动机维修", "起落架检修", "复合材料修复",
+]
+
+
+def is_high_risk_type(work_type):
+    return work_type in HIGH_RISK_TYPES
+
+
+def filter_high_risks(risks):
+    return [r for r in risks if is_high_risk_type(r["work_type"])]

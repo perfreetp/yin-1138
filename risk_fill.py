@@ -1,10 +1,10 @@
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from PySide6.QtCore import Qt, QDateTime, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QLineEdit,
     QPushButton, QListWidget, QListWidgetItem, QFormLayout, QGroupBox,
     QTextEdit, QCheckBox, QDateTimeEdit, QSplitter, QMessageBox, QFrame,
-    QListWidget, QAbstractItemView
+    QListWidget, QAbstractItemView, QDialog, QDialogButtonBox
 )
 from PySide6.QtGui import QFont, QColor
 
@@ -55,15 +55,19 @@ class RiskFillWindow(QWidget):
         top_bar.addStretch()
 
         self.btn_new = QPushButton("➕ 新建风险")
+        self.btn_copy = QPushButton("📋 从历史复制")
         self.btn_back = QPushButton("← 返回筛选")
         self.btn_report = QPushButton("📋 查看日报")
-        for b in [self.btn_new, self.btn_back, self.btn_report]:
+        for b in [self.btn_new, self.btn_copy, self.btn_back, self.btn_report]:
             b.setFixedHeight(36)
             b.setStyleSheet("""QPushButton{background:#64748b;color:white;padding:0 18px;
                 border:none;border-radius:6px;font-weight:500;}QPushButton:hover{background:#475569;}""")
+        self.btn_copy.setStyleSheet("""QPushButton{background:#f59e0b;color:white;padding:0 18px;
+            border:none;border-radius:6px;font-weight:500;}QPushButton:hover{background:#d97706;}""")
         self.btn_report.setStyleSheet("""QPushButton{background:#0ea5e9;color:white;padding:0 18px;
             border:none;border-radius:6px;font-weight:500;}QPushButton:hover{background:#0284c7;}""")
         top_bar.addWidget(self.btn_new)
+        top_bar.addWidget(self.btn_copy)
         top_bar.addWidget(self.btn_back)
         top_bar.addWidget(self.btn_report)
         root.addLayout(top_bar)
@@ -201,6 +205,7 @@ class RiskFillWindow(QWidget):
         self.btn_save.clicked.connect(self._on_save)
         self.btn_delete.clicked.connect(self._on_delete)
         self.btn_new.clicked.connect(self._on_new)
+        self.btn_copy.clicked.connect(self._on_copy_from_history)
         self.btn_back.clicked.connect(self._on_back)
         self.btn_report.clicked.connect(self._on_report)
 
@@ -228,10 +233,10 @@ class RiskFillWindow(QWidget):
         aid = self.context.get("airline_id")
         bid = self.context.get("base_id")
         wd = self.context.get("work_date")
-        risks = database.get_risks(
+        all_risks = database.get_risks(
             airline_id=aid, base_id=bid, contract_id=cid, work_date=wd)
-        self.all_risks = risks
-        for r in risks:
+        self.all_risks = database.filter_high_risks(all_risks)
+        for r in self.all_risks:
             item = QListWidgetItem()
             status_color = {"未开工": "#64748b", "进行中": "#0284c7", "已关闭": "#059669"}[r["status"]]
             tag = "⚠️ " if (not r["scope_ok"] or r["license_status"] != "valid") else ""
@@ -457,3 +462,114 @@ class RiskFillWindow(QWidget):
     def _on_report(self):
         if self.go_to_report is not None:
             self.go_to_report.emit(self.context)
+
+    def _on_copy_from_history(self):
+        aid = self.context.get("airline_id")
+        bid = self.context.get("base_id")
+        cid = self.context.get("contract_id")
+        wd = self.context.get("work_date")
+        today = date.fromisoformat(wd) if wd else date.today()
+        start_date = (today - timedelta(days=30))
+        history = []
+        all_hist = []
+        for d in range(1, 31):
+            dd = (today - timedelta(days=d))
+            rs = database.get_risks(airline_id=aid, base_id=bid, contract_id=cid, work_date=dd.isoformat())
+            history.extend(rs)
+        history = database.filter_high_risks(history)
+        if not history:
+            QMessageBox.information(self, "历史复制",
+                "当前筛选范围近30天内没有可复制的高风险历史作业。")
+            return
+        dlg = _HistoryPickerDialog(self, history)
+        if dlg.exec() == QDialog.Accepted and dlg.selected_risk:
+            src = dlg.selected_risk
+            self.current_risk_id = None
+            self.mode = "new"
+            idx = self.cb_contract.findData(src["contract_id"])
+            if idx >= 0:
+                self.cb_contract.setCurrentIndex(idx)
+            ti = self.cb_work_type.findText(src["work_type"])
+            if ti >= 0:
+                self.cb_work_type.setCurrentIndex(ti)
+            else:
+                self.cb_work_type.setEditText(src["work_type"])
+            self.txt_location.setText(src["work_location"])
+            ti = self.cb_team.findData(src["team_id"])
+            if ti >= 0:
+                self.cb_team.setCurrentIndex(ti)
+            self._load_personnel()
+            isolations = set(src["isolation_measures"].split("、"))
+            for opt, cb in self.isolation_checks:
+                cb.setChecked(opt in isolations)
+            self.txt_remarks.setPlainText(src["remarks"] or "")
+            self.ck_scope.setChecked(bool(src["scope_ok"]))
+            self.ck_safety.setChecked(bool(src["need_safety_officer"]))
+            self.ck_reviewed.setChecked(False)
+            self.cb_status.setCurrentText("未开工")
+            self.dt_end.setDateTime(QDateTime.currentDateTime().addSecs(3600 * 4))
+            QMessageBox.information(self, "复制成功",
+                f"已从历史作业 #{src['id']} 复制：\n"
+                f"  作业类型：{src['work_type']}（{src['work_date']}）\n"
+                f"  位置：{src['work_location']}\n"
+                f"  班组：{src.get('team_name', '')}\n\n"
+                f"请确认人员、时间、许可证状态。")
+
+
+class _HistoryPickerDialog(QDialog):
+    def __init__(self, parent, history):
+        super().__init__(parent)
+        self.setWindowTitle("选择要复制的历史作业")
+        self.resize(780, 560)
+        self.selected_risk = None
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(12)
+
+        info = QLabel(f"共找到近30天内 {len(history)} 条高风险历史作业，请选择一条作为模板：")
+        info.setStyleSheet("font-size:13px;")
+        v.addWidget(info)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setStyleSheet("""QListWidget{font-size:13px;border:1px solid #e2e8f0;border-radius:6px;}
+            QListWidget::item{padding:10px;border-bottom:1px solid #f1f5f9;}
+            QListWidget::item:selected{background:#dbeafe;color:#1e40af;}""")
+        self._populate(history)
+        self.list_widget.itemDoubleClicked.connect(lambda _: self.accept())
+        v.addWidget(self.list_widget, 1)
+
+        hint = QLabel("提示：双击列表项或选中后点「确定」，快速套用（人员和时间需要自己改）")
+        hint.setStyleSheet("color:#64748b;font-size:12px;")
+        v.addWidget(hint)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("确定复制")
+        bb.button(QDialogButtonBox.Cancel).setText("取消")
+        bb.button(QDialogButtonBox.Ok).setStyleSheet("background:#059669;color:white;padding:8px 20px;border:none;border-radius:6px;font-weight:600;")
+        bb.button(QDialogButtonBox.Cancel).setStyleSheet("background:#94a3b8;color:white;padding:8px 20px;border:none;border-radius:6px;")
+        bb.accepted.connect(self._on_ok)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+
+    def _populate(self, history):
+        for r in history:
+            it = QListWidgetItem()
+            tag = "⚠️" if (not r["scope_ok"] or r["license_status"] != "valid") else ""
+            text = (f"{tag} 【{r['work_date']}】{r['work_type']}\n"
+                    f"      位置: {r['work_location']}  |  班组: {r['team_name']}\n"
+                    f"      隔离: {r['isolation_measures']}"
+                    f"{'  | 需安全员' if r['need_safety_officer'] else ''}")
+            it.setText(text)
+            it.setData(Qt.UserRole, r)
+            self.list_widget.addItem(it)
+        if self.list_widget.count() > 0:
+            self.list_widget.setCurrentRow(0)
+
+    def _on_ok(self):
+        it = self.list_widget.currentItem()
+        if it:
+            self.selected_risk = it.data(Qt.UserRole)
+            self.accept()
+        else:
+            QMessageBox.warning(self, "提示", "请先选择一条历史作业。")
