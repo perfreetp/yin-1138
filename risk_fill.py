@@ -227,6 +227,9 @@ class RiskFillWindow(QWidget):
         for t in self.teams:
             self.cb_team.addItem(f"{t['name']} (负责人:{t['leader']})", t["id"])
 
+        if self.context.get("prefill_risk_id"):
+            self.current_risk_id = self.context["prefill_risk_id"]
+
     def _load_sidebar(self):
         self.list_widget.clear()
         cid = self.context.get("contract_id")
@@ -236,6 +239,14 @@ class RiskFillWindow(QWidget):
         all_risks = database.get_risks(
             airline_id=aid, base_id=bid, contract_id=cid, work_date=wd)
         self.all_risks = database.filter_high_risks(all_risks)
+
+        if self.context.get("prefill_risk_id"):
+            rid = self.context["prefill_risk_id"]
+            r = database.get_risk_by_id(rid)
+            if r and r not in self.all_risks:
+                if database.is_high_risk_type(r["work_type"]):
+                    self.all_risks.insert(0, r)
+
         for r in self.all_risks:
             item = QListWidgetItem()
             status_color = {"未开工": "#64748b", "进行中": "#0284c7", "已关闭": "#059669"}[r["status"]]

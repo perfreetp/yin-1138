@@ -15,6 +15,7 @@ import database
 class DailyReportWindow(QWidget):
     go_back = Signal()
     go_to_fill = Signal(dict)
+    go_to_review = Signal(dict)
 
     def __init__(self, context):
         super().__init__()
@@ -44,7 +45,9 @@ class DailyReportWindow(QWidget):
         self.btn_back = QPushButton("← 返回筛选")
         self.btn_refresh = QPushButton("🔄 刷新")
         self.btn_export = QPushButton("📄 复制日报文本")
-        for b in [self.btn_fill, self.btn_back, self.btn_refresh, self.btn_export]:
+        self.btn_export_todo = QPushButton("📋 复制责任方待办")
+        self.btn_review = QPushButton("📊 复盘视图")
+        for b in [self.btn_fill, self.btn_back, self.btn_refresh, self.btn_export, self.btn_export_todo, self.btn_review]:
             b.setFixedHeight(38)
             b.setStyleSheet("""QPushButton{background:#64748b;color:white;padding:0 18px;
                 border:none;border-radius:6px;font-weight:500;font-size:13px;}
@@ -52,8 +55,16 @@ class DailyReportWindow(QWidget):
         self.btn_export.setStyleSheet("""QPushButton{background:#7c3aed;color:white;padding:0 18px;
             border:none;border-radius:6px;font-weight:500;font-size:13px;}
             QPushButton:hover{background:#6d28d9;}""")
+        self.btn_export_todo.setStyleSheet("""QPushButton{background:#0891b2;color:white;padding:0 18px;
+            border:none;border-radius:6px;font-weight:500;font-size:13px;}
+            QPushButton:hover{background:#0e7490;}""")
+        self.btn_review.setStyleSheet("""QPushButton{background:#4f46e5;color:white;padding:0 18px;
+            border:none;border-radius:6px;font-weight:500;font-size:13px;}
+            QPushButton:hover{background:#4338ca;}""")
         top_bar.addWidget(self.btn_refresh)
+        top_bar.addWidget(self.btn_review)
         top_bar.addWidget(self.btn_fill)
+        top_bar.addWidget(self.btn_export_todo)
         top_bar.addWidget(self.btn_export)
         top_bar.addWidget(self.btn_back)
         root.addLayout(top_bar)
@@ -197,6 +208,8 @@ class DailyReportWindow(QWidget):
         self.btn_refresh.clicked.connect(self._load_and_render)
         self.btn_fill.clicked.connect(self._on_fill)
         self.btn_export.clicked.connect(self._on_export)
+        self.btn_export_todo.clicked.connect(self._on_export_todo)
+        self.btn_review.clicked.connect(self._on_review)
         self.btn_fu_add.clicked.connect(self._on_fu_add)
         self.btn_fu_add_manual.clicked.connect(self._on_fu_add_from_problems)
         self.btn_fu_edit.clicked.connect(self._on_fu_edit)
@@ -709,6 +722,9 @@ class DailyReportWindow(QWidget):
         if not self.risks:
             fu_all = database.get_follow_ups(airline_id=aid, base_id=bid, contract_id=cid)
             fu_open = [f for f in fu_all if f["status"] in ("待处理", "进行中", "已逾期")]
+            today_str = ctx.get("work_date", "")
+            fu_yesterday = [f for f in fu_open if f["work_date"] < today_str]
+            fu_today_new = [f for f in fu_open if f["work_date"] >= today_str]
             lines.append("=" * 70)
             lines.append("  ☆ 当前数据范围说明")
             lines.append("-" * 70)
@@ -719,15 +735,21 @@ class DailyReportWindow(QWidget):
             lines.append("  结论：本日上述范围内无高风险作业记录。")
             lines.append("")
             lines.append("  遗留跟进说明：")
-            lines.append(f"    ▸ 未关闭待办（{len(fu_open)} 项）：")
-            if fu_open:
-                for idx, f in enumerate(fu_open, 1):
+            lines.append(f"    ▸ 昨天/更早遗留未关闭（{len(fu_yesterday)} 项）：")
+            if fu_yesterday:
+                for idx, f in enumerate(fu_yesterday, 1):
                     lines.append(f"      {idx}. [{f['status']}] {f['title']}")
                     lines.append(f"         动作：{f['action']}    责任方：{f['responsible']}    计划：{f.get('planned_date') or '（未设）'}")
             else:
-                lines.append("      （无未关闭跟进项。）")
-            lines.append(f"    ▸ 今日新增高风险：0 项")
-            lines.append(f"    ▸ 今日已关闭风险：0 项")
+                lines.append("      （无之前遗留的未关闭项。）")
+            lines.append(f"    ▸ 今日会议新增待办（{len(fu_today_new)} 项）")
+            if fu_today_new:
+                for idx, f in enumerate(fu_today_new, 1):
+                    lines.append(f"      {idx}. [{f['status']}] {f['title']}")
+                    lines.append(f"         动作：{f['action']}    责任方：{f['responsible']}    计划：{f.get('planned_date') or '（未设）'}")
+            else:
+                lines.append("      （今日暂未新增待办。）")
+            lines.append("    ▸ 今日新增高风险：0 项    ▸ 今日已关闭风险：0 项")
             lines.append("")
             lines.append("  会议确认：")
             lines.append("    承包商确认本日无高风险作业，各班组按计划推进低风险日常工作。")
@@ -763,15 +785,34 @@ class DailyReportWindow(QWidget):
 
         lines.append("二、遗留跟进说明（跨天闭环跟踪）")
         lines.append("-" * 70)
-        lines.append(f"  ▸ 未关闭待办（{len(fu_open)} 项）：")
-        if fu_open:
-            for idx, f in enumerate(fu_open, 1):
+
+        fu_yesterday = []
+        fu_today_new = []
+        for f in fu_open:
+            if f["work_date"] < today_str:
+                fu_yesterday.append(f)
+            else:
+                fu_today_new.append(f)
+
+        lines.append(f"  ▸ 昨天/更早遗留未关闭（{len(fu_yesterday)} 项）：")
+        if fu_yesterday:
+            for idx, f in enumerate(fu_yesterday, 1):
                 scope_name = f.get("airline_name") or f.get("base_name") or "全局"
                 lines.append(f"    {idx}. [{f['status']}] {f['title']}")
                 lines.append(f"       动作：{f['action']}    责任方：{f['responsible']}")
                 lines.append(f"       计划完成：{f.get('planned_date') or '（未设）'}    来源日期：{f['work_date']}    关联：#{f['risk_id'] if f.get('risk_id') else '—'}    范围：{scope_name}")
         else:
-            lines.append("    （无未关闭跟进项，前序会议遗留问题均已闭环。）")
+            lines.append("    （无之前遗留的未关闭项，前序会议问题均已闭环。）")
+        lines.append("")
+        lines.append(f"  ▸ 今日会议新增待办（{len(fu_today_new)} 项）：")
+        if fu_today_new:
+            for idx, f in enumerate(fu_today_new, 1):
+                scope_name = f.get("airline_name") or f.get("base_name") or "全局"
+                lines.append(f"    {idx}. [{f['status']}] {f['title']}")
+                lines.append(f"       动作：{f['action']}    责任方：{f['responsible']}")
+                lines.append(f"       计划完成：{f.get('planned_date') or '（未设）'}    关联风险：#{f['risk_id'] if f.get('risk_id') else '—'}    范围：{scope_name}")
+        else:
+            lines.append("    （今日暂未新增待办，如有需要请会后补充挑入跟进台账。）")
         lines.append("")
         lines.append(f"  ▸ 今日新增高风险（{len(today_new)} 项）：")
         if today_new:
@@ -933,6 +974,97 @@ class DailyReportWindow(QWidget):
         cb.setText(text)
         QMessageBox.information(self, "复制成功",
                                 "日报文本已复制到剪贴板，可直接粘贴到邮件/微信/文档中。")
+
+    def _on_export_todo(self):
+        ctx = self.context
+        today = date.today()
+        aid = ctx.get("drill_airline_id") or ctx.get("airline_id")
+        bid = ctx.get("drill_base_id") or ctx.get("base_id")
+        cid = ctx.get("contract_id")
+        scope_parts = []
+        if ctx.get("drill_airline_name") or ctx.get("airline_name"):
+            scope_parts.append(f"航司：{ctx.get('drill_airline_name') or ctx.get('airline_name')}")
+        if ctx.get("drill_base_name") or ctx.get("base_name"):
+            scope_parts.append(f"基地：{ctx.get('drill_base_name') or ctx.get('base_name')}")
+        if ctx.get("contract_name") and ctx["contract_name"] != "全部合同":
+            scope_parts.append(f"合同：{ctx['contract_name']}")
+        scope = " | ".join(scope_parts) if scope_parts else "全部范围"
+        fus = database.get_follow_ups(airline_id=aid, base_id=bid, contract_id=cid)
+        open_fus = [f for f in fus if f["status"] != "已完成"]
+
+        by_resp = {}
+        for fu in open_fus:
+            by_resp.setdefault(fu["responsible"], []).append(fu)
+        if not by_resp:
+            QMessageBox.information(self, "提示", "当前范围内无未关闭的待办事项。")
+            return
+
+        lines = []
+        lines.append("=" * 68)
+        lines.append("  民 航 维 修 承 包 商 · 责 任 方 待 办 清 单")
+        lines.append("=" * 68)
+        lines.append(f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        lines.append(f"数据范围：{scope}")
+        lines.append(f"基准日期：{today.isoformat()}")
+        lines.append("")
+
+        total = len(open_fus)
+        overdue = sum(1 for f in open_fus
+                      if f["status"] == "已逾期"
+                      or (f.get("planned_date") and date.fromisoformat(f["planned_date"]) < today))
+        today_due = sum(1 for f in open_fus
+                        if f.get("planned_date") and date.fromisoformat(f["planned_date"]) == today)
+        lines.append(f"☆ 待办概览：共 {total} 项未关闭（已逾期 {overdue} / 今天到期 {today_due} / 其他 {total-overdue-today_due}）")
+        lines.append("")
+
+        for resp, items in sorted(by_resp.items(), key=lambda x: -len(x[1])):
+            resp_overdue = sum(1 for f in items
+                               if f["status"] == "已逾期"
+                               or (f.get("planned_date") and date.fromisoformat(f["planned_date"]) < today))
+            lines.append("-" * 68)
+            lines.append(f"▶ 责任方：{resp}（共 {len(items)} 项，其中逾期 {resp_overdue} 项）")
+            lines.append("-" * 68)
+            items_sorted = sorted(items, key=lambda f: (
+                0 if f["status"] == "已逾期" else 1,
+                date.fromisoformat(f["planned_date"]).toordinal() if f.get("planned_date") else 999999,
+            ))
+            for idx, fu in enumerate(items_sorted, 1):
+                if fu["status"] == "已逾期" or (fu.get("planned_date") and date.fromisoformat(fu["planned_date"]) < today):
+                    icon = "🚨"
+                elif fu.get("planned_date") and date.fromisoformat(fu["planned_date"]) == today:
+                    icon = "🔴"
+                elif fu.get("planned_date") and (date.fromisoformat(fu["planned_date"]) - today).days <= 7:
+                    icon = "🟠"
+                else:
+                    icon = "🟡"
+                lines.append(f"  {idx}. {icon} [{fu['status']}] {fu['title']}")
+                lines.append(f"     具体动作：{fu['action']}")
+                if fu.get("planned_date"):
+                    pd = date.fromisoformat(fu["planned_date"])
+                    days = (pd - today).days
+                    dstr = "今天到期" if days == 0 else (f"逾期{abs(days)}天" if days < 0 else f"{days}天后到期")
+                    lines.append(f"     计划完成：{fu['planned_date']}（{dstr}）")
+                else:
+                    lines.append(f"     计划完成：（未设定，请尽快安排）")
+                lines.append(f"     来源日期：{fu['work_date']}    关联风险：#{fu['risk_id'] if fu.get('risk_id') else '—'}")
+                lines.append("")
+
+        lines.append("=" * 68)
+        lines.append("说明：🚨=已逾期  🔴=今天到期  🟠=本周到期  🟡=7天以上/未设定")
+        lines.append("      请各责任方按计划完成，每日协调会逐项核对。")
+        lines.append("=" * 68)
+
+        text = "\n".join(lines)
+        cb = QApplication.clipboard()
+        cb.setText(text)
+        resp_cnt = len(by_resp)
+        QMessageBox.information(self, "复制成功",
+            f"责任方待办清单已复制到剪贴板。\n\n"
+            f"包含 {resp_cnt} 个责任方、共 {total} 项未关闭待办。\n"
+            f"可直接粘贴发送给各责任人。")
+
+    def _on_review(self):
+        self.go_to_review.emit(self.context)
 
     def _drill_into_airline(self, airline_id, airline_name):
         ctx = self.context

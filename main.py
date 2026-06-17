@@ -7,6 +7,7 @@ import database
 from project_selector import ProjectSelector
 from risk_fill import RiskFillWindow
 from daily_report import DailyReportWindow
+from review_window import ReviewWindow
 
 
 class AppController(QStackedWidget):
@@ -16,6 +17,7 @@ class AppController(QStackedWidget):
         self.resize(1280, 820)
         self._pages = {}
         self._init_page_selector()
+        self._current_report_key = None
 
     def _init_page_selector(self):
         page = ProjectSelector()
@@ -48,10 +50,38 @@ class AppController(QStackedWidget):
         page = DailyReportWindow(context)
         page.go_back.connect(self._back_to_selector)
         page.go_to_fill.connect(self._open_fill)
+        page.go_to_review.connect(self._open_review)
+        idx = self.addWidget(page)
+        self._pages[key] = idx
+        self._current_report_key = key
+        self.setCurrentIndex(idx)
+        self.setWindowTitle("风险日报看板 - 民航维修现场风险日报")
+
+    def _open_review(self, context):
+        key = "review_" + str(id(context))
+        if key in self._pages:
+            old = self.widget(self._pages[key])
+            self.removeWidget(old)
+            del self._pages[key]
+        page = ReviewWindow(context)
+        page.go_back.connect(self._back_to_report)
+        page.go_to_risk.connect(self._review_jump_risk)
         idx = self.addWidget(page)
         self._pages[key] = idx
         self.setCurrentIndex(idx)
-        self.setWindowTitle("风险日报看板 - 民航维修现场风险日报")
+        self.setWindowTitle("会议复盘视图 - 跟进事项闭环跟踪")
+
+    def _back_to_report(self):
+        if self._current_report_key and self._current_report_key in self._pages:
+            self.setCurrentIndex(self._pages[self._current_report_key])
+            self.setWindowTitle("风险日报看板 - 民航维修现场风险日报")
+        else:
+            self._back_to_selector()
+
+    def _review_jump_risk(self, risk_id, context):
+        ctx = dict(context)
+        ctx["prefill_risk_id"] = risk_id
+        self._open_fill(ctx)
 
     def _back_to_selector(self):
         self.setCurrentIndex(self._pages["selector"])
