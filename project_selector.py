@@ -175,14 +175,17 @@ class ProjectSelector(QWidget):
 
     def _do_search(self):
         cid = self.cb_contract.currentData()
+        aid = self.cb_airline.currentData()
+        bid = self.cb_base.currentData()
         work_date = self.date_edit.date().toString("yyyy-MM-dd")
-        all_risks = database.get_risks(contract_id=cid, work_date=work_date)
+        all_risks = database.get_risks(
+            airline_id=aid, base_id=bid, contract_id=cid, work_date=work_date)
         self.current_risks = [r for r in all_risks if r["work_type"] in HIGH_RISK_TYPES]
         self.current_filters = {
             "contract_id": cid,
             "work_date": work_date,
-            "airline_id": self.cb_airline.currentData(),
-            "base_id": self.cb_base.currentData(),
+            "airline_id": aid,
+            "base_id": bid,
             "airline_name": self.cb_airline.currentText(),
             "base_name": self.cb_base.currentText(),
             "contract_name": self.cb_contract.currentText(),
@@ -261,6 +264,15 @@ class ProjectSelector(QWidget):
 
     def _on_report(self):
         if not self.current_risks:
-            if QMessageBox.question(self, "提示", "当天暂无风险记录，是否仍查看日报？") != QMessageBox.Yes:
+            scope = []
+            if self.cb_airline.currentText() != "全部航司":
+                scope.append(self.cb_airline.currentText())
+            if self.cb_base.currentText() != "全部基地":
+                scope.append(self.cb_base.currentText())
+            if self.cb_contract.currentText() != "全部合同":
+                scope.append(self.cb_contract.currentText())
+            scope.append(self.date_edit.date().toString("yyyy-MM-dd"))
+            msg = "当前筛选条件下暂无风险记录：\n  " + " | ".join(scope) + "\n\n是否仍查看日报？"
+            if QMessageBox.question(self, "提示", msg) != QMessageBox.Yes:
                 return
         self.go_to_report.emit(self.current_filters)

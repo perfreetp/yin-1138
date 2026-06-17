@@ -124,8 +124,11 @@ class DailyReportWindow(QWidget):
 
     def _load_and_render(self):
         cid = self.context.get("contract_id")
+        aid = self.context.get("airline_id")
+        bid = self.context.get("base_id")
         wd = self.context.get("work_date")
-        self.risks = database.get_risks(contract_id=cid, work_date=wd)
+        self.risks = database.get_risks(
+            airline_id=aid, base_id=bid, contract_id=cid, work_date=wd)
         self._build_alert_messages()
         self._build_columns()
         self._update_stats()
@@ -136,8 +139,18 @@ class DailyReportWindow(QWidget):
             if w:
                 w.setParent(None)
         if not self.risks:
-            tip = QLabel("✅ 当日无风险记录")
-            tip.setStyleSheet("color:#059669;font-size:13px;padding:10px;background:#ecfdf5;border-radius:6px;")
+            ctx = self.context
+            scope = []
+            if ctx.get("airline_name") and ctx["airline_name"] != "全部航司":
+                scope.append(f"航司：{ctx['airline_name']}")
+            if ctx.get("base_name") and ctx["base_name"] != "全部基地":
+                scope.append(f"基地：{ctx['base_name']}")
+            if ctx.get("contract_name") and ctx["contract_name"] != "全部合同":
+                scope.append(f"合同：{ctx['contract_name']}")
+            scope.append(f"日期：{ctx.get('work_date', '')}")
+            tip = QLabel("✅ 当前筛选范围内无风险记录\n   " + "  |  ".join(scope))
+            tip.setStyleSheet("color:#059669;font-size:13px;padding:12px;background:#ecfdf5;border-radius:6px;")
+            tip.setWordWrap(True)
             self.alerts_area.addWidget(tip)
             return
 

@@ -228,7 +228,7 @@ def get_personnel(team_id=None):
     return [dict(r) for r in rows]
 
 
-def get_risks(contract_id=None, work_date=None, status=None):
+def get_risks(airline_id=None, base_id=None, contract_id=None, work_date=None, status=None):
     sql = """SELECT r.*, ct.name AS contract_name, ct.airline_id, ct.base_id,
                     a.name AS airline_name, b.name AS base_name, t.name AS team_name
              FROM risks r
@@ -238,6 +238,12 @@ def get_risks(contract_id=None, work_date=None, status=None):
              JOIN teams t ON t.id = r.team_id
              WHERE 1=1"""
     params = []
+    if airline_id:
+        sql += " AND ct.airline_id = ?"
+        params.append(airline_id)
+    if base_id:
+        sql += " AND ct.base_id = ?"
+        params.append(base_id)
     if contract_id:
         sql += " AND r.contract_id = ?"
         params.append(contract_id)

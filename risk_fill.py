@@ -225,8 +225,11 @@ class RiskFillWindow(QWidget):
     def _load_sidebar(self):
         self.list_widget.clear()
         cid = self.context.get("contract_id")
+        aid = self.context.get("airline_id")
+        bid = self.context.get("base_id")
         wd = self.context.get("work_date")
-        risks = database.get_risks(contract_id=cid, work_date=wd)
+        risks = database.get_risks(
+            airline_id=aid, base_id=bid, contract_id=cid, work_date=wd)
         self.all_risks = risks
         for r in risks:
             item = QListWidgetItem()
@@ -345,28 +348,32 @@ class RiskFillWindow(QWidget):
         if not loc:
             raise ValueError("请填写作业位置")
         tid = self.cb_team.currentData()
-        selected = [str(self.all_personnel[i]["id"]) for i in
-                    self.lst_personnel.selectionModel().selectedRows()]
-        if not selected:
+
+        selected_items = self.lst_personnel.selectedItems()
+        if not selected_items:
             raise ValueError("请至少选择一名参与人员")
-        selected_personnel = [self.all_personnel[i] for i in
-                              self.lst_personnel.selectionModel().selectedRows()]
+
+        selected_names = [it.text().split(" (")[0] for it in selected_items]
+        selected_personnel = [p for p in self.all_personnel if p["name"] in selected_names]
+        selected_ids = [str(p["id"]) for p in selected_personnel]
+
         today = datetime.now().date()
         license_status = self.cb_license.currentData()
         mismatches = []
         for p in selected_personnel:
             exp = datetime.fromisoformat(p["license_expiry"]).date()
-            if (exp - today).days < 0:
+            days_left = (exp - today).days
+            if days_left < 0:
                 license_status = "expired"
                 mismatches.append(f"{p['name']}证照已过期")
-            elif (exp - today).days < 7 and license_status == "valid":
+            elif days_left < 7 and license_status == "valid":
                 license_status = "warning"
-            if work_type in ["喷漆作业"] and "喷漆" not in p["qualifications"]:
+            if "喷漆" in work_type and "喷漆" not in p["qualifications"]:
                 mismatches.append(f"{p['name']}缺少喷漆资质")
-            elif work_type in ["结构拆装", "复合材料修复"] and "结构维修" not in p["qualifications"] and work_type not in p["qualifications"]:
-                pass
-            if work_type in ["打磨作业"] and "打磨" not in p["qualifications"]:
-                pass
+            if "打磨" in work_type and "打磨" not in p["qualifications"]:
+                mismatches.append(f"{p['name']}缺少打磨资质")
+            if ("结构" in work_type or "复材" in work_type) and "结构维修" not in p["qualifications"] and "复材" not in p["qualifications"]:
+                mismatches.append(f"{p['name']}缺少结构/复材维修资质")
 
         isolations = [opt for opt, cb in self.isolation_checks if cb.isChecked()]
         if not isolations:
@@ -378,7 +385,7 @@ class RiskFillWindow(QWidget):
             "work_type": work_type,
             "work_location": loc,
             "team_id": tid,
-            "personnel_ids": ",".join(selected),
+            "personnel_ids": ",".join(selected_ids),
             "license_status": license_status,
             "isolation_measures": "、".join(isolations),
             "est_end_time": self.dt_end.dateTime().toString("yyyy-MM-dd HH:mm"),
